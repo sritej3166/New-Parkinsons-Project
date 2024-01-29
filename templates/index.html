@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}"> 
+    <title>SBU Parkinson's Project</title>
+</head>
+
+<body>
+    <!-- Upload Section-->
+     <form action="/convert" method="post" enctype="multipart/form-data">
+        <label for="h5File">Select HDF5 file:</label>    <br>
+        <input type="file" id="h5File" name="h5File" accept=".h5"> <br><br>
+
+        <button class="button" type="submit">Convert H5 to CSV</button>
+    </form>
+    <br>
+    
+    <div style="width:400px;">
+    <form method="post" enctype="multipart/form-data">
+        <label for="video">Upload the walk video</label>
+        <input type="file" name="video" accept=".MOV" required>
+        <br><br>
+        <label for="csv">Upload the walk data file</label>
+        <input type="file" name="csv" accept=".csv" required>
+        <br><br>
+        <button class="button" type="submit">Upload files</button>
+        <hr>
+    </form>
+    </div>
+    <br>
+    <!-- Video Section-->
+    {% if video_path %}
+    <div style="width: 1000px;
+                right: 50px;
+                position: absolute;
+                top: 20px;">
+        <video id="walkVideo" width="1000" height="470" controls>
+            <source src="{{ video_path }}" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+    </div>
+    <div style="width:400px; left:15px; position: absolute;">
+        <label for="timestampInput">Enter Timestamp:</label>
+        <br><br>
+        <input class="input-text" type="text" id="timestampInput" placeholder="Enter desired start time">
+        <br><br>
+        <button class="button" onclick="updateSubplots()">Update TimeStamp</button>
+        <hr>
+        <br><br>
+    </div>
+
+    <!-- Graph Section -->
+    <div style="position: absolute; top: 475px; right: 20px; width: 1050px;" id="graph-div"></div>
+
+    <!-- Annotations section -->
+    <div style=" left: 15px; position: absolute; top: 555px; width: 400px;">
+    <button class="button" id="download-btn">Download Annotations</button>
+    <br>
+    <div id="annotations-table">
+        <table id="annotations-list">
+          <thead>
+            <tr>
+              <th>Reading</th>
+              <th>Annotation Name</th>
+              <th>X Value</th>
+              <th>Y Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Annotation rows will be added here -->
+          </tbody>
+        </table>
+    </div>
+    {% endif %}
+    <script>
+        var graphs = JSON.parse('{{ graphJSON | safe }}');
+        Plotly.newPlot('graph-div', graphs.data, graphs.layout);
+
+        const walkVideo = document.getElementById('walkVideo');
+        var streamingInterval;
+
+        walkVideo.addEventListener('play', () => {
+            streamingInterval = setInterval(scrollGraph, 1000); // Update the interval as necessary
+        });
+
+        walkVideo.addEventListener('pause', () => {
+            clearInterval(streamingInterval);
+        });
+
+        function updateSubplots() {
+            var currentRange = graphs.layout.xaxis.range;
+            var currentStart = new Date(currentRange[0]);
+            var currentEnd = new Date(currentRange[1]);
+            var timestamp = document.getElementById('timestampInput').value;
+            const timeComponents = timestamp.split(":");
+            const hours = parseInt(timeComponents[0], 10) || 0;
+            const minutes = parseInt(timeComponents[1], 10) || 0;
+            const secondsAndMilliseconds = timeComponents[2].split(".");
+            const seconds = parseInt(secondsAndMilliseconds[0], 10) || 0;
+            const milliseconds = parseInt(secondsAndMilliseconds[1], 10) || 0;
+
+            const newStart = new Date(currentStart);
+            newStart.setHours(hours, minutes, seconds, milliseconds);
+            const timeDifference = newStart - currentStart;
+            const newEnd = new Date(newStart.getTime() + 6000); // 6000 milliseconds = 6 seconds
+            
+            var update = {
+                    'xaxis.range': [newStart, newEnd],
+                    'xaxis2.range': [newStart, newEnd],
+                    'xaxis3.range': [newStart, newEnd],
+                    'shapes': [
+                        {
+                            type: 'line',
+                            xref: 'x',
+                            yref: 'paper',
+                            x0: newStart,
+                            x1: newStart,
+                            y0: 0,
+                            y1: 1,
+                            line: {
+                                color: 'red',
+                                width: 2
+                            }
+                        }
+                    ]
+                };
+
+            Plotly.relayout('graph-div', update);
+        }
+
+        function scrollGraph() {
+            var currentRange = graphs.layout.xaxis.range;
+            var newStart = new Date(currentRange[0]);
+            var newEnd = new Date(currentRange[1]);
+
+            newStart.setSeconds(newStart.getSeconds() + 1);
+            newEnd.setSeconds(newEnd.getSeconds() + 1);
+
+            var update = {
+                'xaxis.range': [newStart, newEnd],
+                'xaxis2.range': [newStart, newEnd],
+                'xaxis3.range': [newStart, newEnd],
+                'shapes': [
+                    {
+                        type: 'line',
+                        xref: 'x',
+                        yref: 'paper',
+                        x0: newStart,
+                        x1: newStart,
+                        y0: 0,
+                        y1: 1,
+                        line: {
+                            color: 'red',
+                            width: 2
+                        }
+                    }
+                ]
+            };
+            Plotly.relayout('graph-div', update);
+        }
+
+        function getYvalueAtX(trace, xValue) {
+            console.log("Inside getYValueAtX function");
+            // Find the index of the closest x value
+            var xValueDate = new Date(xValue);
+            var closestIndex = trace.x.reduce(function (prev, curr, index) {
+                const parseTimestamp = timestamp => new Date(timestamp);
+                const prevDiff = Math.abs(parseTimestamp(trace.x[prev]) - xValueDate);
+                const currDiff = Math.abs(parseTimestamp(curr) - xValueDate);
+                return currDiff < prevDiff ? index : prev;
+            }, 0);
+
+            console.log("Closest Index value is:",closestIndex);
+            console.log("Y value being returned is:",trace.y[closestIndex]);
+            return trace.y[closestIndex];
+            }
+
+        var graphDiv = document.getElementById('graph-div');
+        graphDiv.on('plotly_click', function (data) {
+            var clickedTrace = data.points[0].data;
+            var clickedPoint = data.points[0];
+
+            // Prompt the user to enter the annotation text
+            var annotationText = prompt('Enter the annotation text:', '');
+            if (annotationText === null || annotationText.trim() === '') return;
+
+            var xValue = clickedPoint.x;
+            console.log("User clicked at",xValue,"+",clickedPoint.y);
+            var currentAnnotations = (graphDiv.layout.annotations || []).slice();
+
+            // Add annotations to all graphs at the clicked x-value
+            graphs.data.forEach(function (trace, i) {
+                var graphName = trace.name || 'Trace ' + (i + 1);  // Default to 'Trace N' if no name is set
+                var yValue = getYvalueAtX(trace, clickedPoint.x);
+
+                if (yValue !== null) {
+                    const parts = xValue.split(' ');
+                    // Further split the time part to get hours, minutes, and seconds
+                    const timeParts = parts[1].split(':');
+                    // Format and return the time in HH:MM:SS format
+                    xValueUpd =  `${timeParts[0]}:${timeParts[1]}:${timeParts[2].split('.')[0]}`;
+                    console.log("Y value for subplot:",graphName," is ",yValue);
+                    yValueUpd = Math.round(yValue*10)/10;
+
+                    var newAnnotation = {
+                        x: xValue,
+                        y: yValue,
+                        text: annotationText + `(${xValueUpd}, ${yValueUpd})`,
+                        xref: 'x' + (i + 1),
+                        yref: 'y' + (i + 1),
+                        showarrow: true,
+                        arrowhead: 7,
+                        font: {
+                            size: 14,
+                            color: 'black',
+                        },
+                        bgcolor: 'rgba(255,255,255,0.9)',
+                        borderpad: 4,
+                        bordercolor: 'black',
+                        ax: 0,
+                        ay: -40
+                    };
+                    currentAnnotations.push(newAnnotation);
+
+                    // Add annotation to the table, using the trace name
+                    addToAnnotationsTable(graphName, annotationText, xValueUpd, yValueUpd);
+                }
+            });
+                Plotly.relayout(graphDiv, { annotations: currentAnnotations });
+        });
+
+        function addToAnnotationsTable(graphName, annotationText, x, y) {
+            var tableBody = document.getElementById('annotations-list').getElementsByTagName('tbody')[0];
+            var newRow = tableBody.insertRow();
+            var cell1 = newRow.insertCell(0);
+            var cell2 = newRow.insertCell(1);
+            var cell3 = newRow.insertCell(2);
+            var cell4 = newRow.insertCell(3);
+            
+            cell1.innerHTML = graphName;
+            cell2.innerHTML = annotationText;
+            cell3.innerHTML = x;
+            cell4.innerHTML = y;
+        }
+
+        function tableToJson(table) {
+            var headers = [];
+            var data = [];
+
+            // Get column headers from the first row of the thead
+            var headerRow = table.querySelector('thead').rows[0];
+            for (var i = 0; i < headerRow.cells.length; i++) {
+                headers[i] = headerRow.cells[i].innerText.toLowerCase().replace(/ /gi, '');
+            }
+
+            // Get row data from the tbody section
+            var bodyRows = table.querySelector('tbody').rows;
+            for (var i = 0; i < bodyRows.length; i++) {
+                var rowData = {};
+                for (var j = 0; j < bodyRows[i].cells.length; j++) {
+                    rowData[headers[j]] = bodyRows[i].cells[j].innerText;
+                }
+                data.push(rowData);
+            }
+            return JSON.stringify(data, null, 4); // Pretty-print the JSON
+        }
+
+        // Function to download data as a JSON file
+        function downloadJson(jsonData, fileName) {
+            var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(jsonData);
+            var downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", fileName + ".json");
+            document.body.appendChild(downloadAnchorNode); // required for firefox
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        }
+
+        // Click event listener for the download button
+        document.getElementById('download-btn').addEventListener('click', function () {
+            var table = document.getElementById('annotations-table'); // Make sure the ID matches your table ID
+            var json = tableToJson(table);
+            downloadJson(json, 'annotations'); // The 'annotations' is the desired file name
+        });
+    </script>
+</body>
+</html>
